@@ -124,11 +124,16 @@ class DailySizeRotatingFileHandler(logging.handlers.BaseRotatingHandler):
         directory = os.path.dirname(self._base_path)
         filename = os.path.basename(self._base_path)
         stem, ext = os.path.splitext(filename)
-        pattern = "%s.%s*%s" % (stem, "*", ext)
         search_dir = directory if directory else "."
         try:
-            import glob
-            files = [path for path in glob.glob(os.path.join(search_dir, pattern)) if os.path.isfile(path)]
+            import re
+            date_pattern = re.compile(
+                r'^' + re.escape(stem) + r'\.\d{4}-\d{2}-\d{2}(?:\.\d+)?' + re.escape(ext) + r'$')
+            files = [
+                os.path.join(search_dir, fname)
+                for fname in os.listdir(search_dir)
+                if date_pattern.match(fname) and os.path.isfile(os.path.join(search_dir, fname))
+            ]
             files.sort(key=lambda path: os.path.getmtime(path))
             while len(files) > self.backup_count:
                 path = files.pop(0)
@@ -1236,7 +1241,7 @@ class Bag(object):
         return True
 
     def _query_bid_and_finish(self, bid, op, callback, log_type=None, log_count=0, before_item=None,
-                              target_bid=None, op_id="", reason="", context=""):
+                              target_bid=None, op_id="", reason="", context="", target_dbid=0):
         """查询 bid 对应物品和列表位置，再统一写日志并回调。"""
         def _on_item_done(item_result, rows, insertid, error):
             if error:
@@ -1262,7 +1267,7 @@ class Bag(object):
                 index = bag_storage.decode_first_int(index_result)
                 self._write_op_log_and_finish(
                     callback, final_op, index, item, log_type, log_count, before_item, item,
-                    target_bid or 0, op_id, reason, context)
+                    target_bid or 0, op_id, reason, context, target_dbid=target_dbid)
 
             executeRaw(bag_storage.select_index_by_bag_index_sql(self.owner_dbid, bag_index), _on_index_done)
 
@@ -1329,7 +1334,7 @@ class Bag(object):
         if pos >= len(trade_items):
             self._write_op_log_and_finish(
                 callback, bag_storage.OP_TRANSFER, 0, bag_storage.empty_item(), "TRANSFER", len(trade_items),
-                None, None, 0, op_id, reason, context)
+                None, None, 0, op_id, reason, context, target_dbid=target_dbid)
             return
 
         spec = trade_items[pos]
@@ -1411,7 +1416,7 @@ class Bag(object):
         return bag_storage.cell_int(result[0][0]), bag_storage.cell_int(result[0][1])
 
     def _write_op_log_and_finish(self, callback, op, index, item, log_type, log_count, before_item,
-                                 after_item, target_bid, op_id, reason, context):
+                                 after_item, target_bid, op_id, reason, context, target_dbid=0):
         """写入背包操作日志，日志失败只打 ERROR，避免诱发业务重复写背包。"""
         if not log_type:
             self._finish_update(callback, True, op, index, item, "")
@@ -1439,7 +1444,7 @@ class Bag(object):
                     _get_op_log_level(log_type),
                     log_type,
                     self.owner_dbid,
-                    0,
+                    target_dbid,
                     item.get("bid", 0),
                     target_bid,
                     item.get("itemID", 0),
@@ -1467,7 +1472,7 @@ class Bag(object):
                 after_count,
                 before_index,
                 after_index,
-                0,
+                target_dbid,
                 target_bid,
                 op_id,
                 "DONE",

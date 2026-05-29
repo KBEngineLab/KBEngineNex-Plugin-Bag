@@ -271,25 +271,94 @@ Bag 插件的规则目标是：
 
 ### 11.1 什么时候写日志
 
-只要操作成功修改了背包，就应该尽量写日志。
+只要操作成功修改了背包，就会写操作日志。所有 9 种写操作均自动记录：
 
-常见记录对象：
+- 添加（ADD）
+- 删除（REMOVE）
+- 拆分（SPLIT）
+- 交换（SWAP）
+- 移动（MOVE）
+- 合并（MERGE）
+- 整理（SORT）
+- 清空（CLEAR）
+- 交易（TRANSFER）
 
-- 添加
-- 删除
-- 拆分
-- 交换
-- 移动
-- 合并
-- 整理
-- 清空
-- 交易
+### 11.2 日志分级
 
-### 11.2 日志原则
+日志支持三级过滤，方便在不同环境（开发/测试/生产）控制日志量。
+
+| 等级 | 常量 | 记录范围 |
+| ---- | ---- | -------- |
+| L1 | `BAG_LOG_LEVEL_L1` (1) | ADD、REMOVE、CLEAR、TRANSFER |
+| L2 | `BAG_LOG_LEVEL_L2` (2) | L1 + SPLIT、MERGE |
+| L3 | `BAG_LOG_LEVEL_L3` (3) | 全部操作（L2 + MOVE、SWAP、SORT） |
+
+**适用场景：**
+
+- **L1** — 只追踪资产增减和跨玩家交易，适合生产环境审计。
+- **L2** — 额外追踪拆分/合并，适合排查堆叠和整理问题。
+- **L3** — 记录所有操作（含拖拽、整理），适合开发调试和压测验证。
+
+默认等级为 L3。低于当前等级的操作类型不会被记录。
+
+### 11.3 输出类型
+
+| 类型 | 常量 | 说明 |
+| ---- | ---- | ---- |
+| 数据库 | `BAG_LOG_OUTPUT_DATABASE` (1) | 写入 `kbe_plugin_bag_op_logs` 表，支持 SQL 审计查询 |
+| 文件 | `BAG_LOG_OUTPUT_FILE` (2) | 写入本地日志文件，自动按日期和大小滚动分割 |
+
+默认输出到数据库。两种输出可以随时切换，无需重启。
+
+### 11.4 文件日志滚动规则
+
+文件日志使用自定义 `DailySizeRotatingFileHandler`，同时按日期和文件大小双重滚动：
+
+- **日期滚动**：跨天自动生成 `bag.2026-05-29.log` 格式的新文件。
+- **大小滚动**：同一天内文件超过 `maxBytes` 时，追加编号 `bag.2026-05-29.1.log`。
+- **清理策略**：历史文件超过 `backupCount` 时，按修改时间删除最旧的文件。
+- **日志格式**：行业标准 key=value 管道格式：
+
+```text
+2026-05-29 14:30:15 | INFO | bag-op|level=L1|opType=ADD|ownerDBID=10001|targetDBID=0|bid=42|...
+```
+
+### 11.5 配置方法
+
+所有参数通过 Python API 设置，无需编辑配置文件。可以在插件入口、业务脚本或任何地方调用。
+
+```python
+from plugins.Bag.common.bag_service import (
+    setBagLogConfig,
+    setBagLogLevel,
+    setBagLogOutputType,
+    setBagLogFileConfig,
+    getBagLogConfig,
+)
+
+# 完整配置（所有参数可选，未传项保持原值）
+setBagLogConfig(
+    logLevel=2,                          # L2 分级
+    outputType=2,                        # 输出到文件
+    filePath="logs/bag/bag.log",
+    maxBytes=10 * 1024 * 1024,          # 10 MB 滚动
+    backupCount=30,                      # 最多保留 30 个历史文件
+    encoding="utf-8",
+)
+
+# 快捷方法
+setBagLogLevel(1)                       # 只改分级
+setBagLogOutputType(1)                  # 切回数据库
+setBagLogFileConfig(maxBytes=5*1024*1024, backupCount=10)  # 只改文件参数
+config = getBagLogConfig()              # 读取当前配置
+```
+
+### 11.6 日志原则
 
 - 日志是追踪工具，不是业务真相本身。
-- 日志失败不能把已经成功的背包操作假装成失败。
+- 日志写失败不会把已经成功的背包操作回滚成失败，只会打 `ERROR`。
 - 高价值场景建议把业务、背包和日志放进同一事务。
+- `opID`、`reason`、`context` 三个字段建议业务调用时填写，方便后续检索。
 
 ## 12. 错误规则
 
