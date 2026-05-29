@@ -1,0 +1,162 @@
+<root>
+	<Properties>
+		<capacity>
+			<Type>			UINT32			</Type>
+			<Flags>			BASE			</Flags>
+			<Persistent>	true			</Persistent>
+			<Default>		0				</Default>
+		</capacity>
+
+		<notifyBagList>
+			<Type>			UINT8			</Type>
+			<Flags>			BASE			</Flags>
+			<Persistent>	true			</Persistent>
+			<Default>		1				</Default>
+		</notifyBagList>
+
+		<notifyBagUpdated>
+			<Type>			UINT8			</Type>
+			<Flags>			BASE			</Flags>
+			<Persistent>	true			</Persistent>
+			<Default>		1				</Default>
+		</notifyBagUpdated>
+
+		<notifyBagPage>
+			<Type>			UINT8			</Type>
+			<Flags>			BASE			</Flags>
+			<Persistent>	true			</Persistent>
+			<Default>		1				</Default>
+		</notifyBagPage>
+
+		<notifyBagError>
+			<Type>			UINT8			</Type>
+			<Flags>			BASE			</Flags>
+			<Persistent>	true			</Persistent>
+			<Default>		1				</Default>
+		</notifyBagError>
+	</Properties>
+
+	<BaseMethods>
+		<!--
+			服务端添加实例物品：itemID、数量、是否允许堆叠、附加属性 JSON 字符串。
+			安全说明：这里不能声明 Exposed，客户端不允许直接调用写背包接口。
+			任务、商城、掉落、GM 等服务端业务应通过 Avatar.bag 或 BagService 调用。
+		-->
+		<addItem>
+			<Arg>		UINT32			</Arg>
+			<Arg>		UINT32			</Arg>
+			<Arg>		UINT8			</Arg>
+			<Arg>		UNICODE			</Arg>
+		</addItem>
+
+		<!--
+			服务端删除实例物品：bid、数量。
+			安全说明：不暴露给客户端，避免客户端伪造扣除/消耗/整理类请求。
+		-->
+		<removeItem>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UINT32			</Arg>
+		</removeItem>
+
+		<!-- 设置背包容量；0 表示不限制容量。 -->
+		<setCapacity>
+			<Arg>		UINT32			</Arg>
+		</setCapacity>
+
+		<!-- 设置单个客户端回调开关：list、updated、page、error。 -->
+		<setCallbackSwitch>
+			<Arg>		UNICODE			</Arg>
+			<Arg>		UINT8			</Arg>
+		</setCallbackSwitch>
+
+		<!-- 服务端拆分实例物品：bid、拆分数量。 -->
+		<splitItem>
+			<Exposed/>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UINT32			</Arg>
+		</splitItem>
+
+		<!-- 服务端交换两个实例物品位置：bid1、bid2。 -->
+		<swapItem>
+			<Exposed/>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UINT64			</Arg>
+		</swapItem>
+
+		<!-- 客户端拖拽物品到指定位置：目标位置为空则移动，有物品则交换。 -->
+		<moveItem>
+			<Exposed/>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UINT32			</Arg>
+		</moveItem>
+
+		<!-- 服务端合并两个实例物品：fromBID 合并到 toBID。 -->
+		<mergeItem>
+			<Exposed/>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UINT64			</Arg>
+		</mergeItem>
+
+		<!-- 服务端整理背包：按 itemID 升序重排 bagIndex。 -->
+		<sortItems>
+			<Exposed/>
+		</sortItems>
+
+		<!-- 服务端多物品交易；itemsJson 形如 [{"bid":1,"count":2}]。 -->
+		<transferItems>
+			<Arg>		UINT64			</Arg>
+			<Arg>		UNICODE			</Arg>
+		</transferItems>
+
+		<!-- 客户端请求完整背包；查询数据库后通过 ClientMethods.onBagList 回调全量数据。 -->
+		<requestBagList>
+			<Exposed/>
+		</requestBagList>
+
+		<!-- 客户端请求分页背包；查询数据库后通过 ClientMethods.onBagPage 回调分页数据。 -->
+		<requestBagPage>
+			<Exposed/>
+			<Arg>		UINT32			</Arg>
+			<Arg>		UINT32			</Arg>
+		</requestBagPage>
+
+		<!--
+			服务端清空背包；成功后通过 ClientMethods.onBagUpdated 下发 OP_CLEAR。
+			安全说明：高危写接口，不暴露给客户端。
+		-->
+		<clear>
+		</clear>
+	</BaseMethods>
+
+	<ClientMethods>
+		<!-- 完整背包同步：登录、打开背包或主动刷新时使用。 -->
+		<onBagList>
+			<Arg>		BagItems		</Arg>
+		</onBagList>
+
+		<!--
+			背包增量同步：op、index、item。
+			op: 1=新增，2=更新，3=删除，4=清空。
+			index: 客户端列表里的下标；无法确定时为 0。
+			item: 新增/更新时为当前物品，删除/清空时 item.count 通常为 0。
+		-->
+		<onBagUpdated>
+			<Arg>		UINT8			</Arg>
+			<Arg>		UINT32			</Arg>
+			<Arg>		BagItem			</Arg>
+		</onBagUpdated>
+
+		<!-- 分页背包同步：page、pageSize、total、items。 -->
+		<onBagPage>
+			<Arg>		UINT32			</Arg>
+			<Arg>		UINT32			</Arg>
+			<Arg>		UINT32			</Arg>
+			<Arg>		BagItems		</Arg>
+		</onBagPage>
+
+		<!-- 背包操作失败提示。 -->
+		<onBagError>
+			<Arg>		UNICODE			</Arg>
+		</onBagError>
+	</ClientMethods>
+</root>

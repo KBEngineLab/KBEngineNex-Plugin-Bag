@@ -1,0 +1,26 @@
+{
+  "name": "Bag",
+  "prefix": "Bag",
+  "version": "0.1.0",
+  "enabled": true,
+  "description": "Avatar 背包组件插件示例，验证插件组件定义、插件类型、公共 Python 模块和生命周期入口。",
+  "entities": [
+    {
+      "name": "BagManager",
+      "def": "entity_defs/BagManager.def",
+      "hasBase": true,
+      "hasCell": false,
+      "hasClient": false
+    }
+  ],
+  "components": {
+    "base": {
+      "scriptPaths": ["base", "base/components"],
+      "entry": "plugin_entry"
+    },
+    "bots": {
+      "scriptPaths": ["bots/components"],
+      "entry": "plugin_entry"
+    }
+  }
+}

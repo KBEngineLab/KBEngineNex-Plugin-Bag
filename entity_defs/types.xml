@@ -1,0 +1,54 @@
+<root>
+	<!--
+		插件内定义的类型也遵守插件前缀规则。
+		BagItem 是单个背包实例物品的数据结构：
+		- bid：数据库自增主键，代表唯一物品实例。
+		- itemID：物品配置ID或模板ID，不再唯一。
+		- count：堆叠数量。
+		- bagIndex：物品在背包里的位置。
+		- stackable：是否允许堆叠，1=允许，0=不允许。
+		- maxStack：单格最大堆叠数量。
+		- bindType：绑定状态，0=未绑定，业务可扩展更多枚举。
+		- expireAt：过期时间戳，0=不过期。
+		- locked：锁定状态，1=锁定时业务层应拒绝交易/删除等高危操作。
+		- extra：附加属性 JSON 字符串，服务端不解析，业务自行约定结构。
+	-->
+	<BagItem>	FIXED_DICT
+		<Properties>
+			<bid>
+				<Type>	UINT64	</Type>
+			</bid>
+			<itemID>
+				<Type>	UINT32	</Type>
+			</itemID>
+			<count>
+				<Type>	UINT32	</Type>
+			</count>
+			<bagIndex>
+				<Type>	UINT32	</Type>
+			</bagIndex>
+			<stackable>
+				<Type>	UINT8	</Type>
+			</stackable>
+			<maxStack>
+				<Type>	UINT32	</Type>
+			</maxStack>
+			<bindType>
+				<Type>	UINT8	</Type>
+			</bindType>
+			<expireAt>
+				<Type>	UINT64	</Type>
+			</expireAt>
+			<locked>
+				<Type>	UINT8	</Type>
+			</locked>
+			<extra>
+				<Type>	UNICODE	</Type>
+				<DatabaseLength> 4096 </DatabaseLength>
+			</extra>
+		</Properties>
+	</BagItem>
+
+	<!-- 背包列表按 bagIndex 升序保存多个实例物品。 -->
+	<BagItems>	ARRAY <of> BagItem </of>	</BagItems>
+</root>
