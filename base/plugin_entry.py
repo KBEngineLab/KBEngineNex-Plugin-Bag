@@ -33,7 +33,8 @@ def _onCreateTableDone(success, message):
         ERROR_MSG("Bag plugin create table failed: %s" % message)
         return
 
-    INFO_MSG("Bag plugin tables ready: %s, %s" % (bag_storage.TABLE_NAME, bag_storage.OP_LOG_TABLE_NAME))
+    INFO_MSG("Bag plugin tables ready: %s, %s, %s" % (
+        bag_storage.TABLE_NAME, bag_storage.OP_LOG_TABLE_NAME, bag_storage.META_TABLE_NAME))
 
 
 def _ensureBagManager():

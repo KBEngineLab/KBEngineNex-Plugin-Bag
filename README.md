@@ -1,22 +1,21 @@
-# Bag 插件
+# Bag 插件使用帮助
 
-这是一个挂载到 `Avatar` 的背包组件插件样板。
+Bag 是一个挂载在 `Avatar` 上的背包组件插件。它把背包从“独立实体”改成“组件 + 独立数据表”的模式，适合做装备、道具、材料、邮件附件、离线发奖、商城补单和 GM 工具。
 
-核心设计：
+## 1. 这套插件解决什么问题
 
-- `BagComponent` 是 `Avatar` 的组件，不再是独立实体。
-- 背包物品列表不使用 KBE 自动持久化属性。
-- 插件启动后创建独立表 `kbe_plugin_bag_items` 和 `kbe_plugin_bag_op_logs`。
-- 添加、删除、拆分、交换、合并、整理、清空、分页查询都通过 `KBEngine.executeRawDatabaseCommand` 访问数据库。
-- 同一 `ownerDBID` 的写操作会进入 Python 层串行队列，避免高频客户端操作导致 SQL 回调乱序。
-- 插件自己的 `BagManager` base 实体会在 baseapp ready 后自动创建，用来周期性调用 `tickBagQueues()`。
-- 背包容量通过组件属性 `capacity` 暴露给外部设置，`0` 表示不限制容量。
-- 每个客户端回调都有独立开关：`notifyBagList`、`notifyBagUpdated`、`notifyBagPage`、`notifyBagError`。
-- 客户端只允许请求全量/分页查询，通过组件回调接收全量、分页和增量数据。
-- 添加、删除、清空是服务端写接口，不能 Exposed 给客户端。
-- 拆分、交换、合并、整理是客户端可发起的整理类操作，但仍由服务端校验后执行。
+这套实现的目标很直接：
 
-## 文件结构
+- 背包挂在 `Avatar` 组件上，跟玩家账号生命周期一致，业务侧直接用 `self.bag`。
+- 背包实例数据落在独立数据库表里，不依赖 KBE 自动持久化属性。
+- 同一玩家的写操作按顺序串行，避免 SQL 异步回调乱序。
+- 客户端只负责读和展示，真正的写逻辑都在服务端。
+- 插件自带 `BagManager`，负责 watchdog 扫描，避免某条回调丢失后把队列卡住。
+- 背包容量、最大堆叠、绑定、过期、锁定这些常见业务点都留了结构。
+
+如果你只是想快速接入，可以先看第 3 节和第 5 节。
+
+## 2. 文件结构
 
 ```text
 plugins/Bag/
@@ -41,7 +40,19 @@ plugins/Bag/
     bag_storage.py
 ```
 
-`Avatar.def` 里挂载：
+### 关键文件
+
+- `plugin.json`：插件注册入口。
+- `entity_defs/types.xml`：背包类型定义，决定 `BagItem` 和 `BagItems` 的结构。
+- `entity_defs/components/BagComponent.def`：`Avatar` 上的背包组件接口。
+- `base/components/BagComponent.py`：base 侧组件实现。
+- `common/bag_service.py`：背包核心逻辑。
+- `common/bag_storage.py`：SQL 生成和结果解码。
+- `base/plugin_entry.py`：base 插件生命周期入口。
+
+## 3. 如何接入 Avatar
+
+在 `Avatar.def` 里挂载组件：
 
 ```xml
 <bag>
@@ -50,11 +61,335 @@ plugins/Bag/
 </bag>
 ```
 
-## 类型
+含义很简单：
 
-`BagItem` 是单个物品结构：
+- `Type` 必须是 `BagComponent`。
+- `Persistent=false` 表示不走 KBE 自动持久化整套组件状态，背包数据由数据库管理。
+
+挂上以后，`Avatar` 的 base 侧就会多一个 `bag` 组件调用入口，客户端侧也会多一个 `bag` 组件回调入口。
+
+## 4. 启动流程
+
+插件启动时的流程大概是：
+
+1. `plugin.json` 注册插件。
+2. `base/plugin_entry.py` 初始化插件。
+3. `onComponentReady()` 时创建三张表：
+   - `kbe_plugin_bag_items`
+   - `kbe_plugin_bag_op_logs`
+   - `kbe_plugin_bag_meta`
+4. 同时创建一个 `BagManager` 常驻实体。
+5. `BagManager` 用定时器周期性执行 `tickBagQueues()`。
+
+你不用手动启动 watchdog。只要插件加载正常，它就会工作。
+
+## 5. 最快上手
+
+### 5.1 给玩家加物品
+
+```python
+bag = self.bag
+bag.addItem(1001, 3, 1)
+bag.addItem(2001, 1, 0, '{"atk": 12, "quality": "rare"}')
+```
+
+### 5.2 查询背包
+
+```python
+bag.listItems(callback)
+bag.pageItems(1, 20, callback)
+bag.getItem(bid, callback)
+bag.getItemCount(1001, callback)
+```
+
+### 5.3 设置容量
+
+```python
+bag.setCapacity(120)
+```
+
+### 5.4 多物品交易
+
+```python
+bag.transferItems(targetDBID, [{"bid": bid1, "count": 1}, {"bid": bid2, "count": 3}])
+```
+
+## 6. 数据模型
+
+### 6.1 `BagItem`
+
+`BagItem` 是单个物品实例，字段如下：
+
+- `bid`：实例主键，数据库自增 ID。
+- `itemID`：物品配置 ID。
+- `count`：数量。
+- `bagIndex`：背包格子序号。
+- `stackable`：是否允许堆叠，`1` 允许，`0` 不允许。
+- `maxStack`：单格最大堆叠数量。
+- `bindType`：绑定类型。
+- `expireAt`：过期时间戳，`0` 表示不过期。
+- `locked`：锁定状态，`1` 表示锁定。
+- `extra`：附加属性 JSON 字符串。
+
+### 6.2 `BagItems`
+
+`BagItems` 是 `ARRAY<BagItem>`，用于：
+
+- `onBagList(items)`
+- `onBagPage(page, pageSize, total, items)`
+
+### 6.3 物品排序规则
+
+客户端展示和服务端列表都会按以下顺序排序：
+
+1. `bagIndex`
+2. `bid`
+
+## 7. Base 组件接口
+
+这些接口定义在 `entity_defs/components/BagComponent.def` 的 `BaseMethods` 中。
+
+### 7.1 写接口
+
+- `addItem(itemID, count, stackable=1, extra="")`
+  - 服务端调用。
+  - 不暴露给客户端。
+  - 会优先叠加到同 `itemID`、同 `extra` 的未满堆叠格。
+
+- `removeItem(bid, count)`
+  - 服务端调用。
+  - 不暴露给客户端。
+  - 按实例扣数量，扣到 0 会删除该行。
+
+- `setCapacity(capacity)`
+  - 服务端调用。
+  - `0` 表示不限制容量。
+  - 会把容量同步到 `kbe_plugin_bag_meta`。
+
+- `setCallbackSwitch(callbackName, enabled)`
+  - 服务端调用。
+  - `callbackName` 支持：
+    - `list`
+    - `updated`
+    - `page`
+    - `error`
+  - `enabled` 传 `0/1`。
+
+- `splitItem(bid, count)`
+  - 客户端可调用。
+  - 服务端会校验数量和容量。
+
+- `swapItem(bid1, bid2)`
+  - 客户端可调用。
+  - 交换两个实例位置。
+
+- `moveItem(bid, bagIndex)`
+  - 客户端可调用。
+  - 目标格空则移动，有物品则交换。
+
+- `mergeItem(fromBID, toBID)`
+  - 客户端可调用。
+  - 要求 `itemID`、`extra`、`stackable` 一致，并且合并后不超过 `maxStack`。
+
+- `sortItems()`
+  - 客户端可调用。
+  - 按 `itemID` 重排 `bagIndex`。
+
+- `transferItems(targetDBID, itemsJson)`
+  - 服务端调用。
+  - 支持一次交易多个物品。
+  - `itemsJson` 形如：
+
+```json
+[{"bid": 1, "count": 2}, {"bid": 2, "count": 1}]
+```
+
+- `clear()`
+  - 服务端调用。
+  - 不暴露给客户端。
+
+### 7.2 读接口
+
+- `requestBagList()`
+  - 客户端请求完整背包。
+
+- `requestBagPage(page, pageSize)`
+  - 客户端请求分页背包。
+
+### 7.3 安全建议
+
+- 奖励发放、扣除、商城补单、邮件附件、GM 指令，都应该走服务端写接口。
+- 客户端不要直接拿到 `addItem`、`removeItem`、`clear` 这类高危写入口。
+- `splitItem`、`mergeItem`、`moveItem`、`sortItems` 可以开放给客户端，但必须由服务端校验物品归属和规则。
+
+## 8. 服务端 Python API
+
+如果你不想走 `Avatar.bag` 组件，也可以直接按 `databaseID` 取服务对象；日常业务更推荐直接用 `self.bag`。这个入口适合离线发奖、后台补单、GM 工具和不持有 Avatar 实例的业务：
+
+```python
+from plugins.Bag.common.bag_service import getBagForEntityID
+
+bag = getBagForEntityID(databaseID)
+bag.addItem(1001, 3, 1, "", opID="mail_1001", reason="MAIL")
+bag.removeItem(bid, 1, opID="gm_1002", reason="GM")
+```
+
+如果你在 `Avatar` 上下文里，还是直接这样写最顺：
+
+```python
+bag = self.bag
+```
+
+### 8.1 常用方法
+
+- `bag.addItem(itemID, count, stackable=1, extra="", callback=None, opID="", reason="ADD", context="", maxStack=99)`
+- `bag.removeItem(bid, count, callback=None, opID="", reason="REMOVE", context="")`
+- `bag.splitItem(bid, count, callback=None, opID="", reason="SPLIT", context="")`
+- `bag.swapItem(bid1, bid2, callback=None, opID="", reason="SWAP", context="")`
+- `bag.moveItem(bid, bagIndex, callback=None, opID="", reason="MOVE", context="")`
+- `bag.mergeItem(fromBID, toBID, callback=None, opID="", reason="MERGE", context="")`
+- `bag.sortItems(callback=None, opID="", reason="SORT", context="")`
+- `bag.clear(callback=None, opID="", reason="CLEAR", context="")`
+- `bag.setCapacity(capacity, callback=None)`
+- `bag.transferItems(targetDBID, items, callback=None, opID="", reason="TRANSFER", context="")`
+- `bag.listItems(callback)`
+- `bag.pageItems(page, pageSize, callback)`
+- `bag.getItem(bid, callback)`
+- `bag.getItemCount(itemID, callback)`
+
+### 8.2 回调约定
+
+写接口回调统一形如：
+
+```python
+callback(success, op, index, item, message)
+```
+
+读接口回调按各自方法签名返回。
+
+### 8.3 `items` 参数格式
+
+`transferItems()` 既支持 Python list，也支持 JSON 字符串。
+
+Python 侧推荐：
+
+```python
+bag.transferItems(targetDBID, [{"bid": 10001, "count": 1}, {"bid": 10002, "count": 3}])
+```
+
+如果你从 KBE RPC 直接传参，建议传 JSON 字符串：
+
+```python
+avatar.bag.transferItems(targetDBID, '[{"bid":10001,"count":1},{"bid":10002,"count":3}]')
+```
+
+## 9. 客户端回调
+
+客户端和 bots 侧组件都能收到这些回调：
+
+- `onBagList(items)`
+- `onBagUpdated(op, index, item)`
+- `onBagPage(page, pageSize, total, items)`
+- `onBagError(message)`
+
+### 9.1 回调含义
+
+- `onBagList(items)`：全量背包。
+- `onBagUpdated(op, index, item)`：单条增量。
+- `onBagPage(page, pageSize, total, items)`：分页结果。
+- `onBagError(message)`：错误提示。
+
+### 9.2 `onBagUpdated` 的 `op`
+
+- `1`：新增
+- `2`：更新
+- `3`：删除
+- `4`：清空
+- `5`：移动/交换位置
+- `6`：拆分
+- `7`：合并
+- `8`：整理
+- `9`：多物品交易
+
+### 9.3 回调开关
+
+这四个回调可以分别关掉：
+
+- `notifyBagList`
+- `notifyBagUpdated`
+- `notifyBagPage`
+- `notifyBagError`
+
+示例：
+
+```python
+avatar.bag.notifyBagUpdated = 0
+avatar.bag.setCallbackSwitch("page", 0)
+```
+
+## 10. 容量和堆叠
+
+### 10.1 容量
+
+`capacity` 是背包容量，单位是格子数。
+
+- `0`：不限制容量。
+- `>0`：最多允许这么多条实例物品存在于背包里。
+
+`setCapacity(capacity)` 会把容量写入 `kbe_plugin_bag_meta`，后续这些操作都会检查容量：
+
+- `addItem()`
+- `splitItem()`
+- `transferItems()`
+
+### 10.2 堆叠
+
+`maxStack` 是单格最大堆叠数。
+
+规则如下：
+
+- `stackable=1` 时，`addItem()` 会优先叠加到同 `itemID`、同 `extra` 的未满堆叠格。
+- 如果单个堆叠格已经满了，剩余数量会自动拆到新格子。
+- `stackable=0` 时，每次都会新增独立实例。
+
+### 10.3 绑定、过期、锁定
+
+`bindType`、`expireAt`、`locked` 已经进入 `BagItem` 和数据库结构。
+
+当前插件只负责：
+
+- 保存
+- 读取
+- 透传
+- 同步
+
+真正的业务规则，例如：
+
+- 是否允许交易
+- 是否允许删除
+- 到期后怎么处理
+- 锁定状态下是否允许整理
+
+这些建议由业务层继续接。
+
+## 11. 数据库表
+
+插件会创建三张表：
+
+```sql
+CREATE TABLE IF NOT EXISTS kbe_plugin_bag_items (...)
+CREATE TABLE IF NOT EXISTS kbe_plugin_bag_op_logs (...)
+CREATE TABLE IF NOT EXISTS kbe_plugin_bag_meta (...)
+```
+
+### 11.1 `kbe_plugin_bag_items`
+
+用途：保存所有背包实例物品。
+
+核心字段：
 
 - `bid`
+- `ownerDBID`
 - `itemID`
 - `count`
 - `bagIndex`
@@ -63,93 +398,46 @@ plugins/Bag/
 - `bindType`
 - `expireAt`
 - `locked`
-- `extra`：附加属性 JSON 字符串，数据库使用 `TEXT` 保存。
+- `extra`
 
-`BagItems` 是 `ARRAY <of> BagItem </of>`，用于客户端全量、分页同步。
+说明：
 
-## 服务端 API
+- `bid` 是主键。
+- `ownerDBID + itemID` 不是唯一键。
+- 同一种物品可以拆成多个实例。
 
-背包核心不依赖 Avatar 实体实例，assets 业务代码推荐直接按 databaseID 取得背包服务：
+### 11.2 `kbe_plugin_bag_op_logs`
 
-```python
-from plugins.Bag.common.bag_service import getBagForEntityID
+用途：保存背包操作日志。
 
-bag = getBagForEntityID(avatar.databaseID)
-bag.addItem(1001, 3, 1)
-bag.addItem(2001, 1, 0, '{"atk": 12, "quality": "rare"}')
-bag.removeItem(bid, 1)
-bag.splitItem(bid, 2)
-bag.swapItem(bid1, bid2)
-bag.moveItem(bid, bagIndex)
-bag.mergeItem(fromBID, toBID)
-bag.sortItems()
-bag.setCapacity(120)
-bag.transferItems(targetDBID, [{"bid": bid1, "count": 1}, {"bid": bid2, "count": 3}])
-bag.getItemCount(1001, callback)
-bag.pageItems(1, 20, callback)
-```
+核心字段：
 
-这种方式可以覆盖在线 Avatar、离线发奖、邮件附件、商城补单和 GM 工具等场景。
-所有查询接口都是异步接口，必须提供 callback；写接口可以不传 callback，但失败会写 error 日志。
+- `opID`
+- `ownerDBID`
+- `targetDBID`
+- `opType`
+- `bid`
+- `targetBID`
+- `itemID`
+- `count`
+- `beforeCount`
+- `afterCount`
+- `beforeIndex`
+- `afterIndex`
+- `status`
+- `reason`
+- `context`
 
-## Base 组件方法
+### 11.3 `kbe_plugin_bag_meta`
 
-这些方法声明在 `BagComponent.def` 的 `BaseMethods` 中：
+用途：保存背包元数据，目前主要是容量。
 
-- `addItem(itemID, count, stackable=1, extra="")`：服务端调用，不暴露客户端。
-- `removeItem(bid, count)`：服务端调用，不暴露客户端。
-- `setCapacity(capacity)`：服务端调用，设置当前玩家背包容量；`0` 表示不限制。
-- `setCallbackSwitch(callbackName, enabled)`：服务端调用，单独开关 `list`、`updated`、`page`、`error` 回调。
-- `splitItem(bid, count)`：客户端可调用，服务端校验后执行。
-- `swapItem(bid1, bid2)`：客户端可调用，服务端校验后执行。
-- `moveItem(bid, bagIndex)`：客户端可调用，移动到空位置；目标位置已有物品时自动交换。
-- `mergeItem(fromBID, toBID)`：客户端可调用，服务端校验后执行。
-- `sortItems()`：客户端可调用，服务端校验后执行。
-- `transferItems(targetDBID, itemsJson)`：服务端调用，多物品交易；`itemsJson` 形如 `[{"bid":1,"count":2}]`。
-- `clear()`：服务端调用，不暴露客户端。
-- `requestBagList()`：客户端可调用，只读查询。
-- `requestBagPage(page, pageSize)`：客户端可调用，只读查询。
+字段：
 
-安全原则：客户端不能直接调用奖励发放、扣除、清空等高风险方法。拆分、合并、整理这类整理操作可以由客户端发起，但服务端必须校验物品归属、数量、是否可堆叠等条件后再执行。
+- `ownerDBID`
+- `capacity`
 
-## Client 回调
-
-客户端或 bots 侧组件接收：
-
-- `onBagList(items)`：全量背包。
-- `onBagUpdated(op, index, item)`：单条增量。
-- `onBagPage(page, pageSize, total, items)`：分页结果。
-- `onBagError(message)`：错误提示。
-
-`op` 约定：
-
-- `1` 新增
-- `2` 更新
-- `3` 删除
-- `4` 清空
-- `5` 移动/交换位置
-- `6` 拆分
-- `7` 合并
-- `8` 整理
-
-`index` 是按 `bagIndex ASC, bid ASC` 排序后的 0 基下标。删除时 `item.count` 为 0。
-
-## 操作日志
-
-普通 `addItem`、`removeItem`、`splitItem`、`swapItem`、`moveItem`、`mergeItem`、`sortItems`、`clear` 成功修改背包后，会写入 `kbe_plugin_bag_op_logs`。
-
-日志字段包含：
-
-- `opID`：业务侧传入的操作号，可用于追踪奖励、交易、GM 指令等来源。
-- `ownerDBID`：背包所属玩家。
-- `targetDBID`：目标玩家，普通单人操作默认为 0。
-- `opType`：`ADD`、`REMOVE`、`CLEAR` 等。
-- `bid`、`targetBID`、`itemID`、`count`、`beforeCount`、`afterCount`、`beforeIndex`、`afterIndex`：物品、数量和位置变化。
-- `reason`、`context`：业务原因和附加上下文。
-
-普通操作当前不是数据库事务，背包变更成功后再写日志；如果日志写入失败，会打 `ERROR`，但不会把已经成功的背包操作回调成失败。`transferItems()` 支持一次交易多个物品，会按传入顺序执行多条 SQL；它适合样板验证和低风险内部工具，正式高价值交易后续应把源背包扣减、目标背包增加和日志写入放进同一个数据库事务。
-
-## 写操作队列
+## 12. 写操作队列
 
 所有公开写接口都会先进入 `ownerDBID` 维度的串行队列：
 
@@ -161,50 +449,157 @@ bag.pageItems(1, 20, callback)
 - `mergeItem`
 - `sortItems`
 - `clear`
+- `transferItems`
 
-第一版队列粒度是“一个公开写 API 调用 = 一个 Operation”。队列不会自动合并多次拖拽或多次整理请求，因为这些操作可能对应不同日志、客户端表现和业务校验。
+### 12.1 为什么要队列
 
-队列只保证同一个玩家的背包写操作按请求顺序执行；不同玩家之间仍可并发。真正的数据库事务需要 raw DB 命令在同一个数据库连接上执行，当前插件先保留 Operation 边界，后续如果引擎补充 raw transaction 接口，可以在不改变业务调用方式的前提下把单个 Operation 内部切到 `BEGIN/COMMIT/ROLLBACK`。
+KBE 的 `executeRawDatabaseCommand` 是异步的。如果同一玩家连续点很多次：
 
-队列带有卡死保护：单条写操作默认 30 秒没有结束会记录 `ERROR`，给当前操作返回失败，并继续执行该玩家队列里的下一条操作。插件层提供 `tickBagQueues()` 作为 watchdog 扫描入口；同时每次新操作入队前也会主动扫描一次超时队列。迟到的 raw DB 回调会被忽略，避免同一个操作向业务层回调两次。
+- 拖拽
+- 拆分
+- 合并
+- 整理
 
-日志里会直接显示操作名，例如 `ADD`、`MOVE`、`SPLIT`、`MERGE`，方便从 base 日志快速定位哪一类背包操作卡住了。
+没有队列时，后发请求有可能先完成，造成：
 
-## 容量和堆叠
+- 数据库位置乱序
+- 客户端增量顺序乱掉
+- 业务日志和实际状态对不上
 
-`BagComponent.capacity` 是外部可设置的组件属性，默认 `0` 表示无限容量。调用 `setCapacity(capacity)` 会同步写入 `kbe_plugin_bag_meta`，服务层后续 `addItem()`、`splitItem()` 和 `transferItems()` 都会检查容量。
+### 12.2 队列粒度
 
-`BagItem.maxStack` 表示单格最大堆叠数量。`addItem()` 会先填充同 `itemID`、同 `extra`、未满的可堆叠格子，剩余数量再按 `maxStack` 自动拆到新格子；容量不足时会失败并回调错误。
+当前粒度是：
 
-`bindType`、`expireAt`、`locked` 已经进入 `BagItem` 和数据库表结构，方便后续业务实现绑定、限时道具和锁定保护。当前插件只负责存取和同步这些字段；真正的“禁止交易/禁止删除/过期清理”规则应由业务层或后续规则模块接入。
+```text
+一次公开写 API 调用 = 一个 Operation
+```
 
-每个客户端回调都可以单独关闭：
+这意味着：
+
+- 不会自动把多次拖拽合并成一批。
+- 不会自动把多次整理合并成一批。
+- 每个操作的日志和回调都保留独立边界。
+
+### 12.3 超时保护
+
+默认超时时间是 `30s`。
+
+如果某条 raw DB 回调丢了：
+
+- 会打 `ERROR`
+- 当前操作会失败
+- 队列会继续跑下一条
+
+插件里的 `BagManager` 会周期性调用 `tickBagQueues()`。
+
+## 13. 操作日志
+
+成功修改背包后会写操作日志。普通单人操作都是“先改背包，再写日志”。
+
+### 13.1 记录什么
+
+- 来源：`opID`
+- 谁操作：`ownerDBID`
+- 目标玩家：`targetDBID`
+- 操作类型：`opType`
+- 物品变化：`bid`、`targetBID`、`itemID`、`count`
+- 数量变化：`beforeCount`、`afterCount`
+- 位置变化：`beforeIndex`、`afterIndex`
+- 额外信息：`reason`、`context`
+
+### 13.2 重要说明
+
+日志写失败不会把已经成功的背包操作回滚成失败，但会打 `ERROR`。
+
+## 14. 生命周期和插件入口
+
+### 14.1 `base/plugin_entry.py`
+
+base 侧入口会做这些事：
+
+- 初始化检查
+- 建表
+- 创建 `BagManager`
+- 退出时销毁 `BagManager`
+
+### 14.2 `bots/plugin_entry.py`
+
+bots 侧入口主要用于验证插件 common 模块可导入，方便机器人测试环境接入。
+
+## 15. 常见使用场景
+
+### 15.1 登录后显示背包
 
 ```python
-avatar.bag.notifyBagUpdated = 0
-avatar.bag.setCallbackSwitch("page", 0)
+def onClientEnabled(self):
+    self.bag.requestBagList()
 ```
 
-## 数据库
+### 15.2 发放奖励
 
-插件在 baseapp ready 时执行：
-
-```sql
-CREATE TABLE IF NOT EXISTS kbe_plugin_bag_items (...)
-CREATE TABLE IF NOT EXISTS kbe_plugin_bag_op_logs (...)
+```python
+def giveReward(self, avatar, itemID, count):
+    bag = avatar.bag
+    bag.addItem(itemID, count, 1, "", opID="reward_202605", reason="REWARD")
 ```
 
-`kbe_plugin_bag_items` 使用 `bid BIGINT AUTO_INCREMENT` 作为主键。`ownerDBID + itemID` 不是唯一键，因为同一种物品可以拆分成多条实例记录。位置由 `bagIndex` 表示，新物品默认填充为当前最大 `bagIndex + 1`。
+### 15.3 邮件附件
 
-`stackable=1` 时，`addItem` 会优先查找同 `itemID` 且允许堆叠的实例并叠加数量；找不到才新增实例。`stackable=0` 时永远新增实例，适合装备、带随机属性的物品等。
+```python
+bag = receiverAvatar.bag
+bag.addItem(2001, 1, 0, '{"quality":"rare"}', opID="mail_1001", reason="MAIL")
+```
 
-推荐实时写数据库。背包、货币、道具这类高价值数据如果依赖引擎定时归档，baseapp 崩溃时会丢掉归档间隔内的操作。实时写库更可靠，代价是每次背包操作都会产生 SQL 压力。
+### 15.4 多物品交易
 
-后续性能优化可以做：
+```python
+bag.transferItems(
+    targetDBID,
+    [
+        {"bid": 101, "count": 1},
+        {"bid": 102, "count": 3},
+    ],
+    opID="trade_9001",
+    reason="TRADE"
+)
+```
 
-- 同一玩家背包操作队列化。
-- 对高频整理、拆分、合并操作增加数据库事务。
-- 使用事务包裹奖励发放和背包更新。
-- 把高频背包服务拆成独立 inventory service。
+### 15.5 关闭某个回调
 
-第一版先保证可靠性：每次增删立即落库，成功后再同步客户端。
+```python
+avatar.bag.setCallbackSwitch("error", 0)
+```
+
+## 16. 建议和限制
+
+### 建议
+
+- 优先用服务端 API，不要让客户端直接碰高危写接口。
+- 发奖励、扣物品、交易、邮件附件，最好都带 `opID`。
+- 需要稳定追踪时，把 `reason` 和 `context` 填上。
+- 容量、回调开关最好用 `setCapacity()`、`setCallbackSwitch()` 统一设置。
+
+### 限制
+
+- `transferItems()` 目前不是同连接事务版。
+- 绑定、过期、锁定字段已经有了，但业务规则还需要你自己定义。
+- 客户端回调开关只是“是否通知”，不是“是否执行操作”。
+- `capacity` 现在按实例条数统计，不是按重量、体积或 stack 数量统计。
+
+## 17. 一个完整例子
+
+```python
+def onAvatarReady(avatar):
+    bag = avatar.bag
+
+    bag.setCapacity(120)
+    bag.setCallbackSwitch("page", 1)
+    bag.setCallbackSwitch("updated", 1)
+
+    bag.addItem(1001, 3, 1, "", opID="login_bonus", reason="LOGIN")
+    bag.addItem(2001, 1, 0, '{"atk": 12, "quality": "rare"}', opID="gift_01", reason="GIFT")
+
+    bag.requestBagList()
+```
+
+这就是最常见的接法：先定容量，再发物品，再刷新列表。
