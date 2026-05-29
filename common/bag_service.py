@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from collections import deque
 import json
+import logging
+import logging.handlers
+import os
 import time
 from KBEDebug import ERROR_MSG, INFO_MSG
 from plugins.Bag.common import bag_storage
@@ -13,6 +16,270 @@ try:
     basestring
 except NameError:
     basestring = str
+
+
+BAG_LOG_OUTPUT_DATABASE = 1
+BAG_LOG_OUTPUT_FILE = 2
+
+BAG_LOG_LEVEL_L1 = 1
+BAG_LOG_LEVEL_L2 = 2
+BAG_LOG_LEVEL_L3 = 3
+
+_BAG_LOG_CONFIG = {
+    "level": BAG_LOG_LEVEL_L3,
+    "outputType": BAG_LOG_OUTPUT_DATABASE,
+    "filePath": "",
+    "maxBytes": 10 * 1024 * 1024,
+    "backupCount": 30,
+    "encoding": "utf-8",
+}
+_BAG_FILE_LOGGER = None
+
+_BAG_LOG_TYPE_LEVEL = {
+    "ADD": BAG_LOG_LEVEL_L1,
+    "REMOVE": BAG_LOG_LEVEL_L1,
+    "CLEAR": BAG_LOG_LEVEL_L1,
+    "TRANSFER": BAG_LOG_LEVEL_L1,
+    "SPLIT": BAG_LOG_LEVEL_L2,
+    "MERGE": BAG_LOG_LEVEL_L2,
+    "MOVE": BAG_LOG_LEVEL_L3,
+    "SWAP": BAG_LOG_LEVEL_L3,
+    "SORT": BAG_LOG_LEVEL_L3,
+    "UPDATE": BAG_LOG_LEVEL_L1,
+}
+
+
+class DailySizeRotatingFileHandler(logging.handlers.BaseRotatingHandler):
+    """按日期和大小滚动的文件日志处理器。"""
+
+    def __init__(self, filename, max_bytes=0, backup_count=0, encoding=None, delay=False):
+        self._base_path = os.path.abspath(filename or "bag.log")
+        self.max_bytes = max(0, int(max_bytes or 0))
+        self.backup_count = max(0, int(backup_count or 0))
+        self.encoding = encoding or "utf-8"
+        self._current_day = self._today()
+        self._current_index = 0
+        base_filename = self._build_filename(self._current_day, self._current_index)
+        logging.handlers.BaseRotatingHandler.__init__(self, base_filename, "a", self.encoding, delay)
+
+    def _today(self):
+        return time.strftime("%Y-%m-%d")
+
+    def _build_filename(self, day, index):
+        directory = os.path.dirname(self._base_path)
+        filename = os.path.basename(self._base_path)
+        stem, ext = os.path.splitext(filename)
+        if index <= 0:
+            target = "%s.%s%s" % (stem, day, ext)
+        else:
+            target = "%s.%s.%s%s" % (stem, day, int(index), ext)
+        return os.path.join(directory, target) if directory else target
+
+    def shouldRollover(self, record):
+        if self.stream is None:
+            self.stream = self._open()
+
+        day = self._today()
+        if day != self._current_day:
+            return True
+
+        if self.max_bytes <= 0:
+            return False
+
+        msg = "%s\n" % self.format(record)
+        try:
+            current_size = self.stream.tell()
+        except Exception:
+            current_size = os.path.getsize(self.baseFilename) if os.path.exists(self.baseFilename) else 0
+        return current_size + len(msg.encode(self.encoding, "ignore")) >= self.max_bytes
+
+    def doRollover(self):
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        day = self._today()
+        if day != self._current_day:
+            self._current_day = day
+            self._current_index = 0
+        else:
+            self._current_index += 1
+
+        self.baseFilename = self._build_filename(self._current_day, self._current_index)
+        self.stream = self._open()
+        self._cleanup_old_files()
+
+    def emit(self, record):
+        try:
+            if self.shouldRollover(record):
+                self.doRollover()
+            logging.handlers.BaseRotatingHandler.emit(self, record)
+        except Exception:
+            self.handleError(record)
+
+    def _cleanup_old_files(self):
+        if self.backup_count <= 0:
+            return
+
+        directory = os.path.dirname(self._base_path)
+        filename = os.path.basename(self._base_path)
+        stem, ext = os.path.splitext(filename)
+        pattern = "%s.%s*%s" % (stem, "*", ext)
+        search_dir = directory if directory else "."
+        try:
+            import glob
+            files = [path for path in glob.glob(os.path.join(search_dir, pattern)) if os.path.isfile(path)]
+            files.sort(key=lambda path: os.path.getmtime(path))
+            while len(files) > self.backup_count:
+                path = files.pop(0)
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+def _normalize_bag_log_level(level):
+    try:
+        level = int(level or 0)
+    except Exception:
+        return BAG_LOG_LEVEL_L3
+    if level < BAG_LOG_LEVEL_L1:
+        return BAG_LOG_LEVEL_L1
+    if level > BAG_LOG_LEVEL_L3:
+        return BAG_LOG_LEVEL_L3
+    return level
+
+
+def _normalize_bag_log_output_type(output_type):
+    try:
+        output_type = int(output_type or 0)
+    except Exception:
+        return BAG_LOG_OUTPUT_DATABASE
+    if output_type not in (BAG_LOG_OUTPUT_DATABASE, BAG_LOG_OUTPUT_FILE):
+        return BAG_LOG_OUTPUT_DATABASE
+    return output_type
+
+
+def setBagLogConfig(logLevel=None, outputType=None, filePath=None, maxBytes=None,
+                    backupCount=None, encoding=None):
+    """外部可调用的背包日志配置入口。"""
+    global _BAG_FILE_LOGGER
+    if logLevel is not None:
+        _BAG_LOG_CONFIG["level"] = _normalize_bag_log_level(logLevel)
+    if outputType is not None:
+        _BAG_LOG_CONFIG["outputType"] = _normalize_bag_log_output_type(outputType)
+    if filePath is not None:
+        _BAG_LOG_CONFIG["filePath"] = str(filePath or "")
+    if maxBytes is not None:
+        _BAG_LOG_CONFIG["maxBytes"] = max(0, int(maxBytes or 0))
+    if backupCount is not None:
+        _BAG_LOG_CONFIG["backupCount"] = max(0, int(backupCount or 0))
+    if encoding is not None:
+        _BAG_LOG_CONFIG["encoding"] = str(encoding or "utf-8")
+
+    if _BAG_FILE_LOGGER is not None:
+        try:
+            for handler in list(_BAG_FILE_LOGGER.handlers):
+                handler.close()
+                _BAG_FILE_LOGGER.removeHandler(handler)
+        except Exception:
+            pass
+        _BAG_FILE_LOGGER = None
+
+
+def getBagLogConfig():
+    """读取当前背包日志配置。"""
+    return dict(_BAG_LOG_CONFIG)
+
+
+def setBagLogLevel(level):
+    """单独设置日志分级。"""
+    setBagLogConfig(logLevel=level)
+
+
+def setBagLogOutputType(outputType):
+    """单独设置输出类型。"""
+    setBagLogConfig(outputType=outputType)
+
+
+def setBagLogFileConfig(filePath, maxBytes=None, backupCount=None, encoding=None):
+    """单独设置文件日志参数。"""
+    setBagLogConfig(filePath=filePath, maxBytes=maxBytes, backupCount=backupCount, encoding=encoding)
+
+
+def _bag_log_level_name(level):
+    return "L%s" % _normalize_bag_log_level(level)
+
+
+def _get_op_log_level(log_type):
+    return _BAG_LOG_TYPE_LEVEL.get(str(log_type or "").upper(), BAG_LOG_LEVEL_L3)
+
+
+def _bag_log_enabled(log_type):
+    return _get_op_log_level(log_type) <= _normalize_bag_log_level(_BAG_LOG_CONFIG.get("level"))
+
+
+def _bag_file_logger():
+    global _BAG_FILE_LOGGER
+    if _BAG_FILE_LOGGER is not None:
+        return _BAG_FILE_LOGGER
+
+    file_path = _BAG_LOG_CONFIG.get("filePath") or os.path.join("logs", "bag", "bag.log")
+    directory = os.path.dirname(os.path.abspath(file_path))
+    try:
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
+    except Exception as exc:
+        ERROR_MSG("Bag file logger create directory failed: %s" % exc)
+        return None
+
+    logger = logging.getLogger("Bag")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+    except Exception:
+        pass
+
+    handler = DailySizeRotatingFileHandler(
+        file_path,
+        _BAG_LOG_CONFIG.get("maxBytes", 0),
+        _BAG_LOG_CONFIG.get("backupCount", 0),
+        _BAG_LOG_CONFIG.get("encoding", "utf-8"))
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+        "%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(handler)
+    _BAG_FILE_LOGGER = logger
+    return _BAG_FILE_LOGGER
+
+
+def _format_op_log_message(level, log_type, owner_dbid, target_dbid, bid, target_bid, item_id, count,
+                           before_count, after_count, before_index, after_index, op_id, reason, context):
+    """统一背包操作日志文本格式。"""
+    return (
+        "bag-op|level=%s|opType=%s|ownerDBID=%s|targetDBID=%s|bid=%s|targetBID=%s|itemID=%s|count=%s|"
+        "beforeCount=%s|afterCount=%s|beforeIndex=%s|afterIndex=%s|opID=%s|reason=%s|context=%s"
+    ) % (
+        _bag_log_level_name(level),
+        str(log_type or ""),
+        int(owner_dbid or 0),
+        int(target_dbid or 0),
+        int(bid or 0),
+        int(target_bid or 0),
+        int(item_id or 0),
+        int(count or 0),
+        "" if before_count is None else int(before_count),
+        "" if after_count is None else int(after_count),
+        "" if before_index is None else int(before_index),
+        "" if after_index is None else int(after_index),
+        str(op_id or ""),
+        str(reason or ""),
+        str(context or "")
+    )
 
 
 def getBagForEntityID(owner_dbid):
@@ -1150,10 +1417,44 @@ class Bag(object):
             self._finish_update(callback, True, op, index, item, "")
             return
 
+        if not _bag_log_enabled(log_type):
+            self._finish_update(callback, True, op, index, item, "")
+            return
+
         before_count = before_item.get("count") if isinstance(before_item, dict) else None
         after_count = after_item.get("count") if isinstance(after_item, dict) else None
         before_index = before_item.get("bagIndex") if isinstance(before_item, dict) else None
         after_index = after_item.get("bagIndex") if isinstance(after_item, dict) else None
+        output_type = _normalize_bag_log_output_type(_BAG_LOG_CONFIG.get("outputType"))
+
+        if output_type == BAG_LOG_OUTPUT_FILE:
+            logger = _bag_file_logger()
+            if logger is None:
+                ERROR_MSG("Bag file logger unavailable.")
+                self._finish_update(callback, True, op, index, item, "")
+                return
+
+            try:
+                logger.info(_format_op_log_message(
+                    _get_op_log_level(log_type),
+                    log_type,
+                    self.owner_dbid,
+                    0,
+                    item.get("bid", 0),
+                    target_bid,
+                    item.get("itemID", 0),
+                    log_count,
+                    before_count,
+                    after_count,
+                    before_index,
+                    after_index,
+                    op_id,
+                    reason,
+                    context))
+            except Exception as exc:
+                ERROR_MSG("Bag file op log failed: %s" % exc)
+            self._finish_update(callback, True, op, index, item, "")
+            return
 
         try:
             sql = bag_storage.insert_op_log_sql(
