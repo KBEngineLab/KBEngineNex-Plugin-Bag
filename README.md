@@ -561,7 +561,7 @@ _BAG_LOG_TYPE_LEVEL = {
 
 | 参数 | 默认值 | 说明 |
 | ---- | ------ | ---- |
-| `filePath` | `logs/bag/bag.log` | 日志文件路径。目录不存在时会自动创建 |
+| `filePath` | `logs/plugins/bag/bag.log` | 日志文件路径。目录不存在时会自动创建 |
 | `maxBytes` | `10485760` (10 MB) | 单个日志文件最大字节数。超过则滚动到新文件 |
 | `backupCount` | `30` | 历史日志文件最大保留数量。超出后自动删除最旧文件 |
 | `encoding` | `utf-8` | 日志文件编码 |
@@ -590,7 +590,7 @@ from plugins.Bag.common.bag_service import setBagLogConfig
 setBagLogConfig(
     logLevel=2,            # 只记录 L2 及以上（含 ADD/REMOVE/CLEAR/TRANSFER/SPLIT/MERGE）
     outputType=2,          # 输出到文件
-    filePath="logs/bag/bag.log",
+    filePath="logs/plugins/bag/bag.log",
     maxBytes=10 * 1024 * 1024,   # 10 MB
     backupCount=30,
     encoding="utf-8",
@@ -615,7 +615,7 @@ setBagLogOutputType(1)   # 切回数据库
 
 # 只改文件参数
 setBagLogFileConfig(
-    filePath="logs/bag/bag.log",
+    filePath="logs/plugins/bag/bag.log",
     maxBytes=5 * 1024 * 1024,   # 5 MB
     backupCount=10,
 )
@@ -623,7 +623,7 @@ setBagLogFileConfig(
 # 读取当前配置
 config = getBagLogConfig()
 print(config)
-# {"level": 2, "outputType": 1, "filePath": "logs/bag/bag.log", "maxBytes": 5242880, ...}
+# {"level": 2, "outputType": 1, "filePath": "logs/plugins/bag/bag.log", "maxBytes": 5242880, ...}
 ```
 
 所有参数均可选传，只传需要改的项，未传项保持原值不变。
@@ -644,7 +644,7 @@ setBagLogConfig(logLevel=1, outputType=1)
 **示例 2：日志落盘，完整追踪所有操作**
 
 ```python
-setBagLogConfig(logLevel=3, outputType=2, filePath="logs/bag/bag.log")
+setBagLogConfig(logLevel=3, outputType=2, filePath="logs/plugins/bag/bag.log")
 ```
 
 - 操作类型：全部

@@ -340,7 +340,7 @@ from plugins.Bag.common.bag_service import (
 setBagLogConfig(
     logLevel=2,                          # L2 分级
     outputType=2,                        # 输出到文件
-    filePath="logs/bag/bag.log",
+    filePath="logs/plugins/bag/bag.log",
     maxBytes=10 * 1024 * 1024,          # 10 MB 滚动
     backupCount=30,                      # 最多保留 30 个历史文件
     encoding="utf-8",

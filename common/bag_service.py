@@ -232,7 +232,7 @@ def _bag_file_logger():
     if _BAG_FILE_LOGGER is not None:
         return _BAG_FILE_LOGGER
 
-    file_path = _BAG_LOG_CONFIG.get("filePath") or os.path.join("logs", "bag", "bag.log")
+    file_path = _BAG_LOG_CONFIG.get("filePath") or os.path.join("logs", "plugins", "bag", "bag.log")
     directory = os.path.dirname(os.path.abspath(file_path))
     try:
         if directory and not os.path.exists(directory):
