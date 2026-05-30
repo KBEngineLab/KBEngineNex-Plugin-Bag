@@ -751,3 +751,34 @@ def onAvatarReady(avatar):
 ```
 
 这就是最常见的接法：先定容量，再发物品，再刷新列表。
+
+## 18. 测试
+
+测试代码在 `common/test/` 下，分两层：
+
+### 18.1 纯函数测试（pytest，不依赖 KBE）
+
+```bash
+cd plugins/Bag/common/test
+pytest test_bag_model.py test_bag_storage.py -v
+```
+
+| 文件 | 覆盖范围 |
+|------|---------|
+| `test_bag_model.py` | 数据规整：normalize_*、make_item、empty_item、page_items 等 12 个函数 |
+| `test_bag_storage.py` | SQL 生成：create_table_sql、insert_op_log_sql、escape_sql_text、decode_* 等 |
+
+### 18.2 KBE 集成测试（baseapp 运行时）
+
+在 `base/plugin_entry.py` 的 `onComponentReady` 末尾加入：
+
+```python
+from plugins.Bag.common.test.BagServiceTest import start
+start()
+```
+
+测试流程（19 步回调链）：
+
+1. 建表 → 2. 设置容量 → 3. 读取容量 → 4-5. 添加两种物品 → 6. 全量查询 → 7. 分页查询 → 8. 单物品查询 → 9. 数量统计 → 10. 拆分 → 11. 合并 → 12. 交换 → 13. 移动 → 14. 整理 → 15. 删除 → 16. 跨玩家转移 → 17. 清空 → 18. 验证空背包 → 19. 清理目标背包
+
+测试使用专用 DBID `99999901` / `99999902`，不会污染真实玩家数据。每一步失败会打 `ERROR_MSG` 并终止。

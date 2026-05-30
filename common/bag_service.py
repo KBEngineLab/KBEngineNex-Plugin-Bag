@@ -88,6 +88,7 @@ class DailySizeRotatingFileHandler(logging.handlers.BaseRotatingHandler):
 
         msg = "%s\n" % self.format(record)
         try:
+            self.stream.flush()
             current_size = self.stream.tell()
         except Exception:
             current_size = os.path.getsize(self.baseFilename) if os.path.exists(self.baseFilename) else 0
@@ -807,7 +808,7 @@ class Bag(object):
                             return
 
                         self._query_bid_and_finish(
-                            int(new_bid), bag_storage.OP_SPLIT, callback, "SPLIT", count, None, None,
+                            int(new_bid), bag_storage.OP_SPLIT, callback, "SPLIT", count, source_item, None,
                             opID, reason, context)
 
                     executeRaw(bag_storage.insert_split_item_sql(self.owner_dbid, source_item, count), _on_insert_done)
@@ -1038,7 +1039,7 @@ class Bag(object):
                         return
 
                     self._query_bid_and_finish(
-                        to_bid, bag_storage.OP_MERGE, callback, "MERGE", from_item["count"], None, from_bid,
+                        to_bid, bag_storage.OP_MERGE, callback, "MERGE", from_item["count"], from_item, from_bid,
                         opID, reason, context)
 
                 executeRaw(bag_storage.delete_item_by_bid_sql(self.owner_dbid, from_bid), _on_delete_done)
@@ -1251,6 +1252,9 @@ class Bag(object):
 
             item = bag_storage.decode_first_item(item_result)
             if not item:
+                if str(log_type or "").upper() != "REMOVE":
+                    self._finish_update(callback, True, op, 0, bag_storage.empty_item(bid), "")
+                    return
                 item = bag_storage.empty_item(bid)
                 final_op = bag_storage.OP_REMOVE
                 bag_index = 0
