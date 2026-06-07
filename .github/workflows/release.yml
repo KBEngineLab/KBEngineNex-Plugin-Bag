@@ -92,8 +92,11 @@ jobs:
           fi
           REPO_LOWER="${GITHUB_REPOSITORY##*/}"
           REPO_LOWER="${REPO_LOWER,,}"
-          ENCODED_PASS=$(printf '%s' "${GITEE_PASS}" | jq -sRr @uri)
-          git push "https://${GITEE_USER}:${ENCODED_PASS}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --mirror
+          printf '#!/bin/sh\necho "${GIT_PASSWORD}"\n' > /tmp/git-askpass.sh
+          chmod +x /tmp/git-askpass.sh
+          export GIT_PASSWORD="${GITEE_PASS}"
+          export GIT_ASKPASS=/tmp/git-askpass.sh
+          git push "https://${GITEE_USER}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --mirror
 
       - name: Create Gitee Release
         if: steps.check_release.outputs.skip != 'true'
