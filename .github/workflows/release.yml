@@ -92,7 +92,8 @@ jobs:
           fi
           REPO_LOWER="${GITHUB_REPOSITORY##*/}"
           REPO_LOWER="${REPO_LOWER,,}"
-          git push "https://${GITEE_USER}:${GITEE_PASS}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --mirror
+          ENCODED_PASS=$(printf '%s' "${GITEE_PASS}" | jq -sRr @uri)
+          git push "https://${GITEE_USER}:${ENCODED_PASS}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --mirror
 
       - name: Create Gitee Release
         if: steps.check_release.outputs.skip != 'true'
