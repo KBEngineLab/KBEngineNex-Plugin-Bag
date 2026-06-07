@@ -99,7 +99,7 @@ jobs:
           export GIT_PASSWORD="${GITEE_PASS}"
           export GIT_ASKPASS=/tmp/git-askpass.sh
           git push "https://${GITEE_USER}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --all
-          git push "https://${GITEE_USER}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --tags
+          git push "https://${GITEE_USER}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --tags --force
 
       - name: Create Gitee Release
         if: steps.check_release.outputs.skip != 'true'
