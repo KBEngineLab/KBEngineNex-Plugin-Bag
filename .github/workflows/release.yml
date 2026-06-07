@@ -82,17 +82,17 @@ jobs:
 
       - name: Sync code & tags to Gitee
         if: steps.check_release.outputs.skip != 'true'
+        env:
+          GITEE_USER: ${{ secrets.GITEE_USERNAME }}
+          GITEE_PASS: ${{ secrets.GITEE_TOKEN }}
         run: |
-          if [ -z "${{ secrets.GITEE_USERNAME }}" ] || [ -z "${{ secrets.GITEE_TOKEN }}" ]; then
+          if [ -z "${GITEE_USER}" ] || [ -z "${GITEE_PASS}" ]; then
             echo "GITEE_USERNAME or GITEE_TOKEN not set, skipping Gitee sync."
             exit 0
           fi
           REPO_LOWER="${GITHUB_REPOSITORY##*/}"
           REPO_LOWER="${REPO_LOWER,,}"
-          git config --global credential.helper store
-          echo "https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com" > ~/.git-credentials
-          git remote add gitee "https://gitee.com/KBEngineLab/${REPO_LOWER}.git"
-          git push gitee --mirror
+          git push "https://${GITEE_USER}:${GITEE_PASS}@gitee.com/KBEngineLab/${REPO_LOWER}.git" --mirror
 
       - name: Create Gitee Release
         if: steps.check_release.outputs.skip != 'true'
